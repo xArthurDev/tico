@@ -168,6 +168,14 @@ STABLE = [
      "Change the text of a comment you wrote; it wakes nobody and is marked edited_at", "CommentResult"),
     ("/api/v2/tasks/{tid}/comments/{mid}/delete", "post", "Tasks", "deleteTaskComment",
      "Delete a comment you wrote from future comment reads and bot context; existing delivered copies remain", "CommentResult"),
+    ("/api/v2/tasks/{tid}/delete", "post", "Tasks", "deleteTask",
+     "Delete a task made by mistake, with its conversation, to the trash: its human requester or a mover, signed in "
+     "as themselves; a task carrying work is refused (409 has_work)", None),
+    ("/api/v2/tasks/{tid}/restore", "post", "Tasks", "restoreTask",
+     "Put a deleted task back with its conversation, comments, links and number: whoever deleted it, its "
+     "requester or a mover, signed in as themselves", None),
+    ("/api/v2/deleted-tasks", "get", "Tasks", "listDeletedTasks",
+     "Deleted tasks this person may restore, newest first", None),
     ("/api/v2/updates", "get", "Updates", "listUpdates", "Daily and weekly updates", "UpdateList"),
     ("/api/v2/updates/unread", "get", "Updates", "countUnreadUpdates", "How many updates are unread", "Unread"),
     ("/api/v2/updates/read", "post", "Updates", "markUpdatesRead", "Mark updates read or unread", None),
@@ -433,7 +441,9 @@ SCHEMAS = {
                       "as is acceptance_criteria"},
                 number={"type": ["integer", "null"], "description": "The task's number, unique across the team "
                         "(#18945); given once on a numbered type and never changed"},
-                step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"}),
+                step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
+                waiting_on={"type": ["string", "null"], "description": "The person a waiting task waits on; "
+                            "the task is in their Needs you"}),
     "Person": obj({"id": "s", "name": "s", "email": "s", "title": "s", "team": "s", "reports_to": "n", "org_parent": "s"},
                   required=["id", "name", "org_parent"]),
     "Access": obj({"see": "b", "read": "b", "write": "b"},

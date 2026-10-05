@@ -80,7 +80,9 @@ def tool(name, description, properties, required=(), *, writes=False, local=Fals
         schema["required"] = list(required)
     if writes:
         schema["properties"]["operation_id"] = _s(
-            "A stable id for this write so a retried call lands once. Omit for a fresh id.")
+            "A stable id for this write so a retried call lands once. " +
+            ("This tool requires the id." if "operation_id" in schema.get("required", []) else
+             "Omit for a fresh id."))
 
     def register(fn):
         TOOLS.append({"name": name, "description": description, "inputSchema": schema,
@@ -548,6 +550,8 @@ def task_ask(api, args):
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "blocked_by": _s("The id (or 8-character short id) of the task this one waits on; an empty string clears it"),
+       "waiting_on": _s("With status waiting: the person it waits on (their id), so it shows in their Needs you; "
+                        "put exactly what they must do in the note. An empty string clears it"),
        "goal_id": _s("The goal this task serves; an empty string takes it off")},
       required=("id",), writes=True)
 def task_update(api, args):
@@ -565,6 +569,8 @@ def task_update(api, args):
         body["private"] = args["private"]
     if args.get("blocked_by") is not None:
         body["blocked_by"] = args["blocked_by"]
+    if args.get("waiting_on") is not None:
+        body["waiting_on"] = args["waiting_on"]
     return api.post("tasks/" + args["id"], body, key=_key(args))
 
 
@@ -642,6 +648,26 @@ def task_comment_edit(api, args):
       "bot.", {"id": TASK_ID, "comment_id": COMMENT_ID}, required=("id", "comment_id"), writes=True)
 def task_comment_delete(api, args):
     return api.post(f"tasks/{args['id']}/comments/{args['comment_id']}/delete", {}, key=_key(args))
+
+
+@tool("hub_task_delete", "Delete a task made by mistake, such as a duplicate: it goes to the trash and can be "
+      "restored. Only a person signed in as themselves may: the task's requester, or someone who may move any "
+      "task. A task carrying work (a bot turn, a file, an approval, a subtask) is refused; close it instead.",
+      {"id": TASK_ID}, required=("id",), writes=True)
+def task_delete(api, args):
+    return api.post(f"tasks/{args['id']}/delete", {}, key=_key(args))
+
+
+@tool("hub_task_deleted", "Deleted tasks you may restore, newest first. A person only.", {})
+def task_deleted(api, args):
+    return api.get("deleted-tasks")
+
+
+@tool("hub_task_restore", "Put a deleted task back with its conversation, comments, links and number: whoever "
+      "deleted it, its requester, or someone who may move any task. A person only.", {"id": TASK_ID},
+      required=("id",), writes=True)
+def task_restore(api, args):
+    return api.post(f"tasks/{args['id']}/restore", {}, key=_key(args))
 
 
 @tool("hub_task_label", "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end).",
@@ -965,7 +991,7 @@ def market_ask(api, args):
 
 
 @tool("hub_market_report", "Report a market finding in prose. This does not change an entity or an edge. "
-      "urgent wakes the market analyst now.",
+      "urgent wakes the Librarian now.",
       {"kind": {"type": "string", "enum": ["new-entity", "edge", "property-change", "correction", "question", "other"]},
        "about": _s("The name you used"), "claim": _s("What you found, in a sentence"),
        "source_url": _s("Where you read it", default=""), "quote": _s("What the source said", default=""),
@@ -992,7 +1018,7 @@ def market_resolve(api, args):
                      "applied_events": args.get("applied_events") or []}, key=_key(args))
 
 
-@tool("hub_market_apply", "Curator: write the evidence first, then an entity or an edge that cites it, and mark the insight applied.",
+@tool("hub_market_apply", "Librarian (the market curator): write the evidence first, then an entity or an edge that cites it, and mark the insight applied.",
       {"id": _s("Insight id"), "source_url": _s("Source URL", default=""),
        "source_kind": _s("reddit, x, news, site, other", default="other"),
        "quote": _s("What the source said", default=""), "our_read": _s("The curator's sentence", default=""),
@@ -1021,7 +1047,7 @@ def market_apply(api, args):
     return api.post(f"market/insights/{args['id']}/apply", body, key=_key(args))
 
 
-@tool("hub_market_sweep", "Curator: one task on the team owner for every needs-human insight in this run, and a "
+@tool("hub_market_sweep", "Librarian (the market curator): one task on the team owner for every needs-human insight in this run, and a "
       "Listening task only for an entity you mark unverified that is past its verification window.",
       {"today": _s("YYYY-MM-DD; default today"),
        "unverified": {"type": "array", "items": {"type": "object"},
@@ -1039,7 +1065,7 @@ def market_refresh(api, args):
     return api.post("market/delta/refresh", {"today": args.get("today")}, key=_key(args))
 
 
-@tool("hub_market_page", "Curator: rewrite one market page from the graph, whole, in Markdown. `name` is "
+@tool("hub_market_page", "Librarian (the market curator): rewrite one market page from the graph, whole, in Markdown. `name` is "
       "overview, structure-and-size, coverage-universe, people-who-matter, channels, regulation-and-catalysts, "
       "theses or open-questions; the weekly delta is hub_market_refresh's.",
       {"name": _s("The page, e.g. overview"), "body": _s("The whole page in Markdown")},
@@ -2441,6 +2467,41 @@ def github_create_bot_repo(api, args):
     return api.post("github/repos", body, key=_key(args))
 
 
+@tool("hub_repo_product_create", "Owner only. First call with `name` and a stable `operation_id` to preview the "
+      "connected organization, exact repository name, private visibility, empty initialization, and live App "
+      "capability. If capability is available, review the preview and call again with `confirm_repository` set "
+      "to the exact `org/name`. The create request uses the same stable operation id, so retries replay the saved "
+      "receipt and never issue a second GitHub create.",
+      {"name": _s("Exact product repository name, without owner or bot- prefix"),
+       "confirm_repository": _s("Exact org/name from the preview; omit on the preview call")},
+      required=("name", "operation_id"), writes=True)
+def repo_product_create(api, args):
+    operation_id = args.get("operation_id")
+    if not isinstance(operation_id, str) or not operation_id:
+        raise APIError("operation_id", "A stable operation_id is required for this Owner create flow", 422)
+    key = _key(args, ":product-repository")
+    if len(key) > 200:
+        raise APIError("operation_id", "operation_id is too long for a product-repository idempotency key", 422)
+
+    preview = api.get("github/product-repos/preview", name=args["name"])
+    repository = f"{preview.get('org', '')}/{preview.get('name', '')}"
+    if (preview.get("name") != args["name"] or preview.get("repository") != repository or
+            preview.get("visibility") != "private" or preview.get("auto_init") is not False):
+        raise APIError("product_repository_preview", "The server returned an invalid product-repository preview; no repository was created", 502)
+
+    if preview.get("capability") != "available":
+        return {"preview": preview, "created": False, "confirmation_required": False}
+    if not args.get("confirm_repository"):
+        return {"preview": preview, "created": False, "confirmation_required": True}
+    if args["confirm_repository"] != repository:
+        raise APIError("confirmation_required", f"To create this repository, confirm the exact preview target {repository}; no repository was created", 409)
+
+    return api.post("github/product-repos", {
+        "org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
+        "auto_init": preview["auto_init"], "confirmed": True,
+    }, key=key)
+
+
 @tool("hub_tool_list", "Every tool the team uses (each outside system), and what you need to use it: how you reach it "
       "(`access`), the credentials or env names, how it is declared, writes, and query/learning counts. Read this "
       "list before touching an outside system; `hub_tool_show` is the full page. With `bot`, the tools that bot uses, "
@@ -2735,6 +2796,7 @@ AUDIENCE = {
     "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    "hub_repo_product_create": ("owner",),
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
     **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_pause",
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",
