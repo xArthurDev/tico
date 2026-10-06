@@ -52,6 +52,25 @@ def test_exact_greeting_is_fast_once_without_decision_or_job(api, monkeypatch):
     assert len(room(api)["messages"]) == 2 and jobs(api) == before
 
 
+@pytest.mark.parametrize("status_code", [403, 503])
+def test_task_type_api_failure_is_not_presented_as_an_empty_inventory(api, monkeypatch, status_code):
+    decisions = forbid_decision(monkeypatch)
+    calls = []
+
+    async def rejected(_self, method, path, **kwargs):
+        calls.append((method, path))
+        return type("Response", (), {"status_code": status_code})()
+
+    monkeypatch.setattr(assistant.Internal, "call", rejected)
+    before = jobs(api)
+    result = post(api, "assistant/messages", {"text": "what task types do we use?"}, key="inventory-unavailable")
+    assert result["fast"] is True
+    assert result["reply"]["body"] == "I couldn't read the task types for this Tico workspace. Please try again later."
+    assert calls == [("GET", "task-types")]
+    assert not decisions
+    assert jobs(api) == before
+
+
 def test_how_to_type_help_is_still_documentation_and_greeting_with_work_is_not_fast(api, monkeypatch):
     result = post(api, "assistant/messages", {"text": "How do I create a task type?"})
     assert result["fast"] is True and result["intent"] == "help"
@@ -61,3 +80,7 @@ def test_how_to_type_help_is_still_documentation_and_greeting_with_work_is_not_f
     monkeypatch.setattr(assistant, "decide", no_decision)
     result = post(api, "assistant/messages", {"text": "Hi, please plan tomorrow's launch"})
     assert result["fast"] is False
+
+
+def test_inventory_with_a_follow_up_write_request_is_not_a_fast_intent():
+    assert assistant.route("what task types do we use and create one?") == (None, None)
